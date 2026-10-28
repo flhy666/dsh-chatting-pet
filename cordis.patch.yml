@@ -1,0 +1,9 @@
+# dsh-chatting-pet —— bundle patch
+#
+# 把桌宠插件挂进 DSH 配置树。
+# id 与包名一致；name 解析到包入口 lib/index.js（宿主半侧）。
+# 浏览器半侧由 package.json 的 dsh.client 声明，DSH 会自动提供
+# /plugins/dsh-chatting-pet/client.js。
+- insert:
+    - id: dsh-chatting-pet
+      name: 'dsh-chatting-pet'
