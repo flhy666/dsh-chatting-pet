@@ -331,9 +331,7 @@ module.exports = function attachVoice(deps) {
       edgeModule = require(edgeModulePath);
       log('edge tts module loaded: ' + edgeModulePath);
       return edgeModule;
-    } catch (_) {
-      /* fall through to dependency resolution */
-    }
+    } catch (_) { /* fall through */ }
     try {
       edgeModule = require('msedge-tts');
       log('edge tts module loaded (package dependency)');
@@ -591,6 +589,23 @@ module.exports = function attachVoice(deps) {
     }
     sendToWindow(win, { phase: 'end', id, ok: true });
     return seq > 0;
+  }
+  function writeCloudApiKey(key) {
+    try {
+      const cloud = readCloudConfig();
+      const aliyun = Object.assign({}, (cloud && cloud.aliyun) || {});
+      const next = String(key || '').trim();
+      if (next) aliyun.apiKey = next;
+      else delete aliyun.apiKey;
+      const merged = Object.assign({}, cloud, { aliyun });
+      fs.mkdirSync(voiceDir, { recursive: true });
+      fs.writeFileSync(cloudConfigPath, JSON.stringify(merged, null, 2), 'utf8');
+      log('aliyun api key ' + (next ? 'updated' : 'cleared'));
+      return true;
+    } catch (e) {
+      log('write aliyun key failed: ' + (e && e.message ? e.message : String(e)));
+      return false;
+    }
   }
   async function synthSegmentAliyun(text, cfg) {
     const cloud = readCloudConfig();
@@ -1148,9 +1163,7 @@ module.exports = function attachVoice(deps) {
   function biliQr() {
     try {
       return require(biliQrModulePath);
-    } catch (_) {
-      /* fall through */
-    }
+    } catch (_) { /* fall through */ }
     try {
       return require('qrcode');
     } catch (_) {
@@ -1956,6 +1969,9 @@ module.exports = function attachVoice(deps) {
                   res.writeHead(200, { 'content-type': 'application/json' });
                   res.end(JSON.stringify({ ok: true }));
                   return;
+                }
+                if (typeof parsed.aliyunKey === 'string') {
+                  writeCloudApiKey(parsed.aliyunKey);
                 }
                 const state = applyVoiceConfigPatch(parsed);
                 res.writeHead(200, { 'content-type': 'application/json' });
