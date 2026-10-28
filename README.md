@@ -29,7 +29,7 @@ dsh plugin --profile desktop add github:flhy666/dsh-chatting-pet
 打开 **设置 → 桌宠配置** 最下面的「语音」卡片：
 
 1. **语音朗读**：开关
-2. **音色**：Edge 免费；阿里云需要 `%DSH_HOME%\dsh-chatting-pet\voice\cloud.json` 里填 API Key
+2. **音色**：Edge 免费；阿里云可以直接在设置里填「阿里云 API Key」（存在 `%DSH_HOME%\dsh-chatting-pet\voice\cloud.json`）
 3. **人格**：选内置或导入角色卡
 4. **B站**：点「绑定 B站账号」扫码；不绑定也能刷热门
 5. **QQ号**：填群号/私聊号，套用 qq-groupmate 人设与群记忆
