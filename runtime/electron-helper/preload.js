@@ -92,6 +92,12 @@ contextBridge.exposeInMainWorld('petBridge', {
   runSelfPlay() {
     ipcRenderer.send('pet:selfplay');
   },
+  runControl(text) {
+    ipcRenderer.send('pet:control', String(text || ''));
+  },
+  openCommandWindow() {
+    ipcRenderer.send('pet:command-window');
+  },
   getVoicePresets() {
     try {
       return ipcRenderer.sendSync('pet:voice-presets');

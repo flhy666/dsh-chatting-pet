@@ -2115,6 +2115,39 @@ module.exports = function attachVoice(deps) {
     if (typeof id === 'string') applyPreset(id);
   });
 
+  ipcMain.on('pet:control', (_event, text) => {
+    runControl(text).then((res) => log('control -> ' + JSON.stringify(res))).catch(() => {});
+  });
+
+  ipcMain.on('pet:command-window', () => {
+    try {
+      const { BrowserWindow } = require('electron');
+      const html = [
+        '<!doctype html><meta charset="utf-8">',
+        '<style>body{font:14px system-ui;margin:0;background:#1b1c1f;color:#eee;padding:14px}',
+        'input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #444;background:#2a2c31;color:#fff}',
+        'button{margin-top:10px;padding:8px 16px;border:0;border-radius:8px;background:#3b82f6;color:#fff;cursor:pointer}</style>',
+        '<input id="q" placeholder="例：打开记事本然后输入你好" autofocus>',
+        '<button onclick="send()">执行</button>',
+        '<script>',
+        'function send(){var v=document.getElementById("q").value.trim();if(v&&window.petBridge){window.petBridge.runControl(v);}window.close();}',
+        'document.getElementById("q").addEventListener("keydown",function(e){if(e.key==="Enter")send();});',
+        'setTimeout(function(){document.getElementById("q").focus();},50);',
+        '</script>',
+      ].join('');
+      const win = new BrowserWindow({
+        width: 560,
+        height: 170,
+        alwaysOnTop: true,
+        resizable: false,
+        title: '给桌宠下指令',
+        webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), contextIsolation: true },
+      });
+      win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    } catch (e) {
+      log('command window failed: ' + (e && e.message ? e.message : String(e)));
+    }
+  });
   ipcMain.on('pet:selfplay', () => {
     runSelfPlay(true).then((res) => log('selfplay -> ' + JSON.stringify(res))).catch(() => {});
   });
