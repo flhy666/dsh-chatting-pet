@@ -1507,6 +1507,13 @@ module.exports = function attachVoice(deps) {
         return { ok: true, steps: done, planner: 'ollama' };
       }
 
+      // 想翻 QQ 群：读 qq-groupmate 的群记忆来汇报（不硬点 QQ 界面）
+      if (/(qq|群)/i.test(text) && /(翻|看|聊|好玩|消息|说)/i.test(text)) {
+        const qq = await runTask('qq');
+        if (qq.ok) return { ok: true, steps: ['翻了翻群里的消息'], summary: qq.summary };
+        return { ok: false, error: qq.error || '翻不了群' };
+      }
+
       // 常见自然说法：直接开 B站 / 浏览器
       if (/b站|哔哩|bilibili/i.test(text)) {
         await launchTarget('https://www.bilibili.com');
