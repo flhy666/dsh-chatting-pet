@@ -36,6 +36,8 @@ const DEFAULT_CONFIG = {
   selfPlay: false,
   selfPlayIntervalSec: 180,
   fullControl: false,
+  plannerModel: '',
+  plannerUrl: 'http://127.0.0.1:11434',
   idleVoice: true,
   triggerKey: 'c',
   edgeVolume: '+0%',
@@ -980,6 +982,7 @@ module.exports = function attachVoice(deps) {
       taskFeedback: cfg.taskFeedback !== false,
       selfPlay: cfg.selfPlay === true,
       fullControl: cfg.fullControl === true,
+      plannerModel: cfg.plannerModel || '',
       qqReady: !!(cfg.qqUid && (qqCharacter() || qqMemoryText(cfg.qqUid))),
       qqCharacter: (qqCharacter() && qqCharacter().name) || '',
       triggerKeys: TRIGGER_KEYS,
@@ -1017,6 +1020,9 @@ module.exports = function attachVoice(deps) {
     }
     if (patch && typeof patch.fullControl === 'boolean') {
       writeConfig({ fullControl: patch.fullControl });
+    }
+    if (typeof patch.plannerModel === 'string') {
+      writeConfig({ plannerModel: patch.plannerModel.trim() });
     }
     if (patch && typeof patch.triggerKey === 'string' && TRIGGER_KEYS.some((k) => k.id === patch.triggerKey)) {
       writeConfig({ triggerKey: patch.triggerKey });
@@ -1387,6 +1393,52 @@ module.exports = function attachVoice(deps) {
     });
   }
 
+  async function planWithOllama(text) {
+    const cfg = readConfig();
+    const model = String(cfg.plannerModel || '').trim();
+    if (!model) return null;
+    const endpoint = String(cfg.plannerUrl || 'http://127.0.0.1:11434').replace(/\/+$/, '') + '/api/chat';
+    const system = [
+      '你是电脑指令解析器。把用户的话翻译成 JSON 数组，不要解释。',
+      '只能用这些动作：',
+      '{"action":"launch","target":"程序名或网址"}',
+      '{"action":"type","text":"要输入的文字"}',
+      '{"action":"key","keys":["ctrl","s"]}',
+      '{"action":"click","text":"要点击的可见文字"}',
+      '{"action":"scroll","deltaY":600}',
+      '{"action":"wait","ms":800}',
+      '只输出 JSON 数组。',
+    ].join('\n');
+    try {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          stream: false,
+          format: 'json',
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: text },
+          ],
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) {
+        log('planner http ' + r.status);
+        return null;
+      }
+      const data = await r.json();
+      const content = data && data.message && data.message.content ? data.message.content : '';
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && Array.isArray(parsed.steps)) return parsed.steps;
+      return null;
+    } catch (e) {
+      log('planner failed: ' + (e && e.message ? e.message : String(e)));
+      return null;
+    }
+  }
   async function runControl(instruction) {
     const cfg = readConfig();
     if (cfg.fullControl !== true) return { ok: false, error: '完全权限没开' };
@@ -1394,6 +1446,49 @@ module.exports = function attachVoice(deps) {
     if (!text) return { ok: false, error: '没有指令' };
     const steps = [];
     try {
+      const planned = await planWithOllama(text);
+      if (planned && planned.length) {
+        const done = [];
+        for (const step of planned.slice(0, 12)) {
+          const act = String(step.action || '');
+          if (act === 'launch') {
+            await launchTarget(step.target || '');
+            done.push('打开' + (step.target || ''));
+            await new Promise((r) => setTimeout(r, 1200));
+          } else if (act === 'type') {
+            await wcuAction('type_text', { text: String(step.text || ''), focusMode: 'preserve' });
+            done.push('输入文字');
+          } else if (act === 'key') {
+            const keys = Array.isArray(step.keys) ? step.keys.map((k) => String(k).toLowerCase()) : [];
+            if (keys.length) await wcuAction('keypress', { keys });
+            done.push('按键 ' + keys.join('+'));
+          } else if (act === 'click') {
+            const q = String(step.text || '');
+            const found = await wcuAction('find', { query: q, maxResults: 3 });
+            const item = found && found.items ? found.items[0] : null;
+            if (item && item.elementId) {
+              await wcuAction('click', { elementId: item.elementId });
+              done.push('点击「' + q + '」');
+            } else {
+              done.push('没找到「' + q + '」');
+            }
+          } else if (act === 'scroll') {
+            await wcuAction('scroll', { x: 1280, y: 700, deltaY: Number(step.deltaY) || 600 });
+            done.push('滚动');
+          } else if (act === 'wait') {
+            await new Promise((r) => setTimeout(r, Math.min(5000, Number(step.ms) || 800)));
+          }
+        }
+        const summary = done.join('；') || '什么都没做';
+        const petP = await pickPetForIdle();
+        if (petP && readConfig().taskFeedback !== false) {
+          await hostRequest('POST', PET_ROUTE + '/chat?pet=' + encodeURIComponent(petP.id) + '&surface=' + petP.surface, JSON.stringify({
+            text: '【执行结果】' + summary + '。用一句话告诉主人搞定了没有（20 字内，口语）。',
+          }));
+        }
+        return { ok: true, steps: done, planner: 'ollama' };
+      }
+
       // 常见自然说法：直接开 B站 / 浏览器
       if (/b站|哔哩|bilibili/i.test(text)) {
         await launchTarget('https://www.bilibili.com');
