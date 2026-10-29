@@ -1,6 +1,6 @@
 ﻿{
     "name":  "dsh-chatting-pet",
-    "version":  "0.2.7",
+    "version":  "0.2.8",
     "description":  "会说话的桌宠：语音输出/语音聊天、闲聊模式、记忆库、人格切换、B站自刷、QQ 人设记忆。基于 dsh-pet (MIT) 的 fork。",
     "icon":  "assets/logo.png",
     "keywords":  [

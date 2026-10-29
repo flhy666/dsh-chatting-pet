@@ -1411,6 +1411,29 @@ module.exports = function attachVoice(deps) {
       Promise.resolve(speakNow({ text: '（小声）' + text, petId: 'main' })).catch(() => {});
     } catch (_) { /* ignore */ }
   }
+  async function openQqAndBrowse() {
+    const exe = 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe';
+    try {
+      if (fs.existsSync(exe)) await launchTarget(exe);
+      await new Promise((r) => setTimeout(r, 3000));
+      const listed = await wcuAction('list_windows', {});
+      const wins = (listed && listed.windows ? listed.windows : []).filter((w) => /QQ/i.test(String(w.name || '')) && (w.boundingBox || {}).width > 400);
+      const win = wins[0];
+      if (!win) return { ok: false, error: '没找到 QQ 窗口' };
+      await wcuAction('activate_window', { windowTitle: win.name });
+      await new Promise((r) => setTimeout(r, 1200));
+      const seen = await wcuAction('ocr', { query: '' });
+      const lines = (seen && (seen.lines || [])) 
+        .map((l) => String(l.text || l.words?.map((w) => w.text).join('') || '').trim())
+        .filter((s) => s.length > 1)
+        .slice(-12);
+      const summary = lines.length ? lines.join('；') : 'QQ 打开了，但没读到聊天内容';
+      announceTask('qq', summary);
+      return { ok: true, steps: ['打开QQ', '翻看聊天'], summary };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
   async function planWithOllama(text) {
     const cfg = readConfig();
     const model = String(cfg.plannerModel || '').trim();
@@ -1507,11 +1530,9 @@ module.exports = function attachVoice(deps) {
         return { ok: true, steps: done, planner: 'ollama' };
       }
 
-      // 想翻 QQ 群：读 qq-groupmate 的群记忆来汇报（不硬点 QQ 界面）
-      if (/(qq|群)/i.test(text) && /(翻|看|聊|好玩|消息|说)/i.test(text)) {
-        const qq = await runTask('qq');
-        if (qq.ok) return { ok: true, steps: ['翻了翻群里的消息'], summary: qq.summary };
-        return { ok: false, error: qq.error || '翻不了群' };
+      // 想翻 QQ：真的打开 QQ 窗口，读屏幕上的聊天
+      if (/qq/i.test(text)) {
+        return await openQqAndBrowse();
       }
 
       // 常见自然说法：直接开 B站 / 浏览器
