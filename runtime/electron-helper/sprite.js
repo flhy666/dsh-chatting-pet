@@ -1658,7 +1658,10 @@ class PetSprite {
       { label: '闲聊模式', action: 'idle-chat' },
       { label: '刷B站', action: 'task-bili' },
       { label: '看群', action: 'task-qq' },
-      { label: '自己玩电脑', action: 'self-play' },
+      { label: '自己玩电脑', children: [
+        { label: '普通模式', action: 'self-play' },
+        { label: '命令模式（需完全权限）', action: 'control-dialog' },
+      ] },
       { label: '上网找乐子', action: 'task-fun' },
       { label: '语音音色', children: voicePresetMenu() },
       { label: '回到初始位置', action: 'home' },
@@ -1748,6 +1751,13 @@ class PetSprite {
       return;
     }
 
+
+    if (leaf.action === 'control-dialog') {
+      if (window.petBridge && typeof window.petBridge.openCommandWindow === 'function') {
+        window.petBridge.openCommandWindow();
+      }
+      return;
+    }
 
     if (leaf.action === 'self-play') {
       if (window.petBridge && typeof window.petBridge.runSelfPlay === 'function') {

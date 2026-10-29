@@ -1491,7 +1491,15 @@ module.exports = function attachVoice(deps) {
   async function browseQqGroups() {
     const opened = await openAppByName('qq');
     if (!opened.ok) return opened;
-    await focusAppWindow('qq');
+    let win = await focusAppWindow('qq');
+    if (!win) {
+      await new Promise((r) => setTimeout(r, 2500));
+      win = await focusAppWindow('qq');
+    }
+    if (!win) {
+      announceTask('qq', 'QQ 打开了，但窗口还没出来');
+      return { ok: true, steps: ['打开QQ'], summary: 'QQ 打开了，窗口还没出来' };
+    }
     // 点左侧群列表中部，再滚一滚
     await wcuAction('click', { x: 150, y: 380 });
     await new Promise((r) => setTimeout(r, 800));
