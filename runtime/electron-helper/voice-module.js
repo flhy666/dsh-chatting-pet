@@ -33,6 +33,8 @@ const DEFAULT_CONFIG = {
   biliExclude: [],
   biliLastRun: '',
   taskFeedback: true,
+  selfPlay: false,
+  selfPlayIntervalSec: 180,
   idleVoice: true,
   triggerKey: 'c',
   edgeVolume: '+0%',
@@ -975,6 +977,7 @@ module.exports = function attachVoice(deps) {
       triggerKey: cfg.triggerKey || 'c',
       qqUid: cfg.qqUid || '',
       taskFeedback: cfg.taskFeedback !== false,
+      selfPlay: cfg.selfPlay === true,
       qqReady: !!(cfg.qqUid && (qqCharacter() || qqMemoryText(cfg.qqUid))),
       qqCharacter: (qqCharacter() && qqCharacter().name) || '',
       triggerKeys: TRIGGER_KEYS,
@@ -1005,6 +1008,10 @@ module.exports = function attachVoice(deps) {
     }
     if (patch && typeof patch.taskFeedback === 'boolean') {
       writeConfig({ taskFeedback: patch.taskFeedback });
+    }
+    if (patch && typeof patch.selfPlay === 'boolean') {
+      writeConfig({ selfPlay: patch.selfPlay });
+      if (patch.selfPlay) idleState.lastSelfPlayAt = 0;
     }
     if (patch && typeof patch.triggerKey === 'string' && TRIGGER_KEYS.some((k) => k.id === patch.triggerKey)) {
       writeConfig({ triggerKey: patch.triggerKey });
@@ -1319,7 +1326,7 @@ module.exports = function attachVoice(deps) {
       const label = kind === 'bili' ? 'B站' : 'QQ群';
       const prompt =
         '【任务完成】' + label + '的结果：' + String(summary || '').slice(0, 300) +
-        '。请用一两句话向主人汇报，口语、符合人设，不要逐条念清单，也不要提「任务」这个词。';
+        '。请用一句话向主人汇报（不超过 30 字），口语、符合人设，不要念清单，也不要提「任务」这个词。';
       await hostRequest(
         'POST',
         PET_ROUTE + '/chat?pet=' + encodeURIComponent(pet.id) + '&surface=' + pet.surface,
@@ -1330,6 +1337,92 @@ module.exports = function attachVoice(deps) {
     }
   }
 
+  function wcuAction(action, input) {
+    return new Promise((resolve) => {
+      try {
+        const script = path.join(path.resolve(__dirname, '..', '..', '..'), 'dsh-computer-use-win', 'scripts', 'windows-uia.ps1');
+        if (!fs.existsSync(script)) {
+          resolve(null);
+          return;
+        }
+        const child = require('node:child_process').spawn(
+          'powershell.exe',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Action', action],
+          { windowsHide: true },
+        );
+        let out = '';
+        let done = false;
+        const finish = (value) => {
+          if (done) return;
+          done = true;
+          try { child.kill(); } catch (_) { /* ignore */ }
+          resolve(value);
+        };
+        child.stdout.on('data', (chunk) => { out += chunk; });
+        child.on('close', () => {
+          try { finish(JSON.parse(out.trim() || '{}')); } catch (_) { finish(null); }
+        });
+        child.on('error', () => finish(null));
+        setTimeout(() => finish(null), 12000).unref?.();
+        try { child.stdin.end(JSON.stringify(input || {})); } catch (_) { finish(null); }
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  }
+
+  let selfPlayBusy = false;
+  async function runSelfPlay() {
+    const cfg = readConfig();
+    if (cfg.selfPlay !== true || selfPlayBusy) return { ok: false, error: 'off' };
+    if (idleState.listening || idleState.speaking) return { ok: false, error: 'busy' };
+    selfPlayBusy = true;
+    try {
+      const listed = await wcuAction('list_windows', {});
+      const wins = (listed && listed.windows ? listed.windows : []).filter((w) => {
+        const name = String(w.name || '').trim();
+        const box = w.boundingBox || {};
+        if (!name || name.length < 2) return false;
+        if ((box.width || 0) < 420 || (box.height || 0) < 320) return false;
+        if (/桌宠（桌面模式）|Program Manager|Shell_TrayWnd|输入体验|DummyDWM/i.test(name)) return false;
+        return true;
+      });
+      const target = wins.length ? wins[Math.floor(Math.random() * wins.length)] : null;
+      if (!target) return { ok: false, error: 'no-window' };
+      const box = target.boundingBox || {};
+      const x = Math.round((box.x || 0) + (box.width || 800) * (0.35 + Math.random() * 0.3));
+      const y = Math.round((box.y || 0) + (box.height || 600) * (0.3 + Math.random() * 0.35));
+      await wcuAction('move', { x, y });
+      await new Promise((r) => setTimeout(r, 350));
+      await wcuAction('scroll', { x, y, deltaY: Math.random() < 0.5 ? 120 : -120 });
+      const title = String(target.name || '').slice(0, 40);
+      const prompt =
+        '【自己玩电脑】你刚把鼠标挪到《' + title + '》上，还滚了一下。' +
+        '用一句话说说你在干嘛、或者发现了什么（20 字内，口语，不要解释、不要念窗口标题的原词）。';
+      const pet = await pickPetForIdle();
+      if (pet) {
+        await hostRequest('POST', PET_ROUTE + '/chat?pet=' + encodeURIComponent(pet.id) + '&surface=' + pet.surface, JSON.stringify({ text: prompt }));
+      }
+      return { ok: true, title };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    } finally {
+      selfPlayBusy = false;
+    }
+  }
+
+  function startSelfPlayTimer() {
+    setInterval(() => {
+      try {
+        const cfg = readConfig();
+        if (cfg.selfPlay !== true) return;
+        const gap = Math.max(60, Number(cfg.selfPlayIntervalSec) || 180) * 1000;
+        if (Date.now() - (idleState.lastSelfPlayAt || 0) < gap) return;
+        idleState.lastSelfPlayAt = Date.now();
+        runSelfPlay().then((r) => log('selfplay -> ' + JSON.stringify(r))).catch(() => {});
+      } catch (_) { /* ignore */ }
+    }, 30000).unref?.();
+  }
   async function runTask(kind) {
     const type = String(kind || '').toLowerCase();
     if (type === 'bili') {
@@ -1680,7 +1773,17 @@ module.exports = function attachVoice(deps) {
               'idle chat observation: window="' + snapshot.title + '" process=' + snapshot.processName +
                 ' text=' + String(snapshot.text || '').slice(0, 80),
             );
-            if (/桌宠（桌面模式）/.test(String(snapshot.title || ''))) {
+            // 不盯着 DSH / 终端 / 编辑器看，免得学一嘴技术词
+    if (/桌宠（桌面模式）/.test(String(snapshot.title || ''))) {
+      return { ok: false, error: 'self-window' };
+    }
+    if (/DeepSeek Harness|Windows PowerShell|PowerShell|命令提示符|Command Prompt|Windows Terminal|Visual Studio Code|Cursor/i.test(String(snapshot.title || ''))) {
+      return { ok: false, error: 'tech-window' };
+    }
+    if (/DeepSeek Harness\.exe|WindowsTerminal\.exe|powershell\.exe|Code\.exe|Cursor\.exe/i.test(String(snapshot.processName || ''))) {
+      return { ok: false, error: 'tech-process' };
+    }
+    if (false) {
               log('idle chat skip observation: own window');
               snapshot = { title: '', processName: '', text: '' };
             } else {
@@ -1739,8 +1842,10 @@ module.exports = function attachVoice(deps) {
       const prompt =
         (memoryBlock ? '【你脑子里的记忆】' + memoryBlock : '【可聊的素材】') + screenLine +
         '\n请从记忆或桌面上正在做的事里挑一个具体的话题，主动跟主人开口（18-30 字，口语、活泼，像突然想起来那样）。' +
+        '\n如果桌面上是文档、网页、游戏这类东西，就猜一句「你是在写文章吗」「你是在看什么好玩的」；只起话题，不描述细节、不解释、不点评。' +
         '可以提之前聊过/看到的事，也可以就着主人现在在做的事顺口搭一句；' +
-        '但别念 BV 号、别逐条复述、别说「根据记忆」、别解释你在看屏幕。';
+        '但别念 BV 号、别逐条复述、别说「根据记忆」、别解释你在看屏幕。' +
+        '你看不懂就直接用大白话猜一句（比如「你是在写文章吗？」「你是在发布什么东西吗？」），不要用专业术语、不要解释、不要把屏幕上的词照念。';
 
       const resp = await hostRequest(
         'POST',
@@ -1975,7 +2080,19 @@ module.exports = function attachVoice(deps) {
               res.end(JSON.stringify({ ok: true, daily: readConfig().biliDaily === true }));
             });
             return;
-          }          if (req.method === 'POST' && req.url === '/task/run') {
+          }          if (req.method === 'POST' && req.url === '/selfplay/run') {
+            runSelfPlay()
+              .then((result) => {
+                res.writeHead(200, { 'content-type': 'application/json' });
+                res.end(JSON.stringify(result));
+              })
+              .catch((e) => {
+                res.writeHead(500, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+              });
+            return;
+          }
+          if (req.method === 'POST' && req.url === '/task/run') {
             let body = '';
             req.on('data', (chunk) => { if (body.length < 4096) body += chunk; });
             req.on('end', () => {
@@ -2149,6 +2266,7 @@ module.exports = function attachVoice(deps) {
   startPageLogServer();
   startIdleTimer();
   startBiliDaily();
+  startSelfPlayTimer();
   setTimeout(() => {
     try {
       const cfg = readConfig();
