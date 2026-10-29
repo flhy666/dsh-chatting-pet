@@ -32,6 +32,7 @@ const DEFAULT_CONFIG = {
   biliKeywords: [],
   biliExclude: [],
   biliLastRun: '',
+  taskFeedback: true,
   idleVoice: true,
   triggerKey: 'c',
   edgeVolume: '+0%',
@@ -973,6 +974,7 @@ module.exports = function attachVoice(deps) {
       idleVoice: cfg.idleVoice !== false,
       triggerKey: cfg.triggerKey || 'c',
       qqUid: cfg.qqUid || '',
+      taskFeedback: cfg.taskFeedback !== false,
       qqReady: !!(cfg.qqUid && (qqCharacter() || qqMemoryText(cfg.qqUid))),
       qqCharacter: (qqCharacter() && qqCharacter().name) || '',
       triggerKeys: TRIGGER_KEYS,
@@ -1000,6 +1002,9 @@ module.exports = function attachVoice(deps) {
     }
     if (patch && typeof patch.idleVoice === 'boolean') {
       writeConfig({ idleVoice: patch.idleVoice });
+    }
+    if (patch && typeof patch.taskFeedback === 'boolean') {
+      writeConfig({ taskFeedback: patch.taskFeedback });
     }
     if (patch && typeof patch.triggerKey === 'string' && TRIGGER_KEYS.some((k) => k.id === patch.triggerKey)) {
       writeConfig({ triggerKey: patch.triggerKey });
@@ -1306,6 +1311,56 @@ module.exports = function attachVoice(deps) {
     if (biliDailyTimer.unref) biliDailyTimer.unref();
   }
 
+  async function announceTask(kind, summary) {
+    try {
+      if (readConfig().taskFeedback === false) return;
+      const pet = await pickPetForIdle();
+      if (!pet) return;
+      const label = kind === 'bili' ? 'B站' : 'QQ群';
+      const prompt =
+        '【任务完成】' + label + '的结果：' + String(summary || '').slice(0, 300) +
+        '。请用一两句话向主人汇报，口语、符合人设，不要逐条念清单，也不要提「任务」这个词。';
+      await hostRequest(
+        'POST',
+        PET_ROUTE + '/chat?pet=' + encodeURIComponent(pet.id) + '&surface=' + pet.surface,
+        JSON.stringify({ text: prompt }),
+      );
+    } catch (e) {
+      log('announce task failed: ' + (e && e.message ? e.message : String(e)));
+    }
+  }
+
+  async function runTask(kind) {
+    const type = String(kind || '').toLowerCase();
+    if (type === 'bili') {
+      try {
+        const picks = await biliRefresh(4);
+        const summary = picks.length ? picks.map((p) => '《' + p.title + '》').join('、') : '今天没拉到新视频';
+        announceTask('bili', summary);
+        return { ok: true, count: picks.length, summary };
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : String(e) };
+      }
+    }
+    if (type === 'qq') {
+      const cfg = readConfig();
+      if (!cfg.qqUid) return { ok: false, error: '还没填 QQ 群号/私聊号' };
+      try {
+        const ctx = qqContext(cfg.qqUid);
+        const lines = ctx.memory
+          .split('\n')
+          .filter((line) => /^-\s+\*\*/.test(line.trim()))
+          .slice(-8)
+          .map((line) => line.replace(/\[[^\]]*\]\([^)]*\)/g, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim());
+        const summary = lines.length ? lines.join('；') : '群里最近没新消息';
+        announceTask('qq', summary);
+        return { ok: true, summary };
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : String(e) };
+      }
+    }
+    return { ok: false, error: '未知任务：' + kind };
+  }
   function biliPickLines(limit) {
     return readBiliPicks().slice(0, limit || 3).map((p) => {
       const meta = [];
@@ -1744,6 +1799,10 @@ module.exports = function attachVoice(deps) {
     if (typeof id === 'string') applyPreset(id);
   });
 
+  ipcMain.on('pet:task', (_event, kind) => {
+    runTask(kind).then((res) => log('task ' + kind + ' -> ' + JSON.stringify(res))).catch(() => {});
+  });
+
   ipcMain.on('pet:idle-chat', () => {
     setIdleChat(!(idleState.enabled === true));
   });
@@ -1916,7 +1975,25 @@ module.exports = function attachVoice(deps) {
               res.end(JSON.stringify({ ok: true, daily: readConfig().biliDaily === true }));
             });
             return;
-          }          if (req.method === 'GET' && req.url === '/persona/list') {
+          }          if (req.method === 'POST' && req.url === '/task/run') {
+            let body = '';
+            req.on('data', (chunk) => { if (body.length < 4096) body += chunk; });
+            req.on('end', () => {
+              let parsed = {};
+              try { parsed = JSON.parse(body || '{}'); } catch (_) { parsed = {}; }
+              runTask(parsed.kind)
+                .then((result) => {
+                  res.writeHead(200, { 'content-type': 'application/json' });
+                  res.end(JSON.stringify(result));
+                })
+                .catch((e) => {
+                  res.writeHead(500, { 'content-type': 'application/json' });
+                  res.end(JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+                });
+            });
+            return;
+          }
+          if (req.method === 'GET' && req.url === '/persona/list') {
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ ok: true, personas: listPersonas().map((p) => ({ id: p.id, name: p.name })), current: readConfig().personaId || '' }));
             return;

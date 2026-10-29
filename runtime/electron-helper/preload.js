@@ -86,6 +86,9 @@ contextBridge.exposeInMainWorld('petBridge', {
   idleChatToggle() {
     ipcRenderer.send('pet:idle-chat');
   },
+  runTask(kind) {
+    ipcRenderer.send('pet:task', kind);
+  },
   getVoicePresets() {
     try {
       return ipcRenderer.sendSync('pet:voice-presets');
