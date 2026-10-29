@@ -35,6 +35,7 @@ const DEFAULT_CONFIG = {
   taskFeedback: true,
   selfPlay: false,
   selfPlayIntervalSec: 180,
+  fullControl: false,
   idleVoice: true,
   triggerKey: 'c',
   edgeVolume: '+0%',
@@ -978,6 +979,7 @@ module.exports = function attachVoice(deps) {
       qqUid: cfg.qqUid || '',
       taskFeedback: cfg.taskFeedback !== false,
       selfPlay: cfg.selfPlay === true,
+      fullControl: cfg.fullControl === true,
       qqReady: !!(cfg.qqUid && (qqCharacter() || qqMemoryText(cfg.qqUid))),
       qqCharacter: (qqCharacter() && qqCharacter().name) || '',
       triggerKeys: TRIGGER_KEYS,
@@ -1012,6 +1014,9 @@ module.exports = function attachVoice(deps) {
     if (patch && typeof patch.selfPlay === 'boolean') {
       writeConfig({ selfPlay: patch.selfPlay });
       if (patch.selfPlay) idleState.lastSelfPlayAt = 0;
+    }
+    if (patch && typeof patch.fullControl === 'boolean') {
+      writeConfig({ fullControl: patch.fullControl });
     }
     if (patch && typeof patch.triggerKey === 'string' && TRIGGER_KEYS.some((k) => k.id === patch.triggerKey)) {
       writeConfig({ triggerKey: patch.triggerKey });
@@ -1371,6 +1376,76 @@ module.exports = function attachVoice(deps) {
     });
   }
 
+  function launchTarget(target) {
+    return new Promise((resolve) => {
+      try {
+        const child = require('node:child_process').spawn('cmd.exe', ['/c', 'start', '', String(target)], { windowsHide: true });
+        child.on('close', () => resolve(true));
+        child.on('error', () => resolve(false));
+        setTimeout(() => resolve(true), 2500).unref?.();
+      } catch (_) { resolve(false); }
+    });
+  }
+
+  async function runControl(instruction) {
+    const cfg = readConfig();
+    if (cfg.fullControl !== true) return { ok: false, error: '完全权限没开' };
+    const text = String(instruction || '').trim();
+    if (!text) return { ok: false, error: '没有指令' };
+    const steps = [];
+    try {
+      const parts = text.split(/然后|接着|再|并且|并/).map((s) => s.trim()).filter(Boolean);
+      for (const part of parts) {
+        let m;
+        if ((m = part.match(/^(?:打开|启动|运行)\s*(.+)$/))) {
+          const name = m[1].trim();
+          const map = { 记事本: 'notepad.exe', 计算器: 'calc.exe', 浏览器: 'msedge', 画图: 'mspaint.exe', 设置: 'ms-settings:', 任务管理器: 'taskmgr.exe' };
+          const target = map[name] || (/^https?:\/\//.test(name) ? name : name);
+          await launchTarget(target);
+          steps.push('打开' + name);
+          await new Promise((r) => setTimeout(r, name === '浏览器' || /^https?:/.test(target) ? 1500 : 700));
+        } else if ((m = part.match(/^(?:输入|打字|填写)\s*(.+)$/))) {
+          await wcuAction('type_text', { text: m[1].trim(), focusMode: 'preserve' });
+          steps.push('输入文字');
+        } else if ((m = part.match(/^(?:按|按下|快捷键)\s*(.+)$/))) {
+          const keys = m[1].trim().split(/[+\s]+/).filter(Boolean).map((k) => k.toLowerCase());
+          await wcuAction('keypress', { keys });
+          steps.push('按键 ' + keys.join('+'));
+        } else if ((m = part.match(/^(?:点击|点开|点)\s*(.+)$/))) {
+          const q = m[1].trim();
+          const found = await wcuAction('find', { query: q, maxResults: 3 });
+          const item = found && (found.items ? found.items[0] : null);
+          if (item && item.elementId) {
+            await wcuAction('click', { elementId: item.elementId });
+            steps.push('点击「' + q + '」');
+          } else {
+            steps.push('没找到「' + q + '」');
+          }
+        } else if (/滚动|往下|往上/.test(part)) {
+          const box = { x: 1200, y: 700 };
+          await wcuAction('scroll', { x: box.x, y: box.y, deltaY: /往上/.test(part) ? -600 : 600 });
+          steps.push('滚动');
+        } else if ((m = part.match(/^搜索\s*(.+)$/))) {
+          const q = m[1].trim();
+          await launchTarget('https://www.bing.com/search?q=' + encodeURIComponent(q));
+          steps.push('搜索「' + q + '」');
+          await new Promise((r) => setTimeout(r, 1500));
+        } else {
+          steps.push('不会：' + part);
+        }
+      }
+      const summary = steps.join('；') || '什么都没做';
+      const pet = await pickPetForIdle();
+      if (pet && readConfig().taskFeedback !== false) {
+        await hostRequest('POST', PET_ROUTE + '/chat?pet=' + encodeURIComponent(pet.id) + '&surface=' + pet.surface, JSON.stringify({
+          text: '【执行结果】' + summary + '。用一句话告诉主人搞定了没有（20 字内，口语）。',
+        }));
+      }
+      return { ok: true, steps };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
   let selfPlayBusy = false;
   async function runSelfPlay() {
     const cfg = readConfig();
@@ -2080,7 +2155,25 @@ module.exports = function attachVoice(deps) {
               res.end(JSON.stringify({ ok: true, daily: readConfig().biliDaily === true }));
             });
             return;
-          }          if (req.method === 'POST' && req.url === '/selfplay/run') {
+          }          if (req.method === 'POST' && req.url === '/control/run') {
+            let body = '';
+            req.on('data', (chunk) => { if (body.length < 8192) body += chunk; });
+            req.on('end', () => {
+              let parsed = {};
+              try { parsed = JSON.parse(body || '{}'); } catch (_) { parsed = {}; }
+              runControl(parsed.instruction)
+                .then((result) => {
+                  res.writeHead(200, { 'content-type': 'application/json' });
+                  res.end(JSON.stringify(result));
+                })
+                .catch((e) => {
+                  res.writeHead(500, { 'content-type': 'application/json' });
+                  res.end(JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }));
+                });
+            });
+            return;
+          }
+          if (req.method === 'POST' && req.url === '/selfplay/run') {
             runSelfPlay()
               .then((result) => {
                 res.writeHead(200, { 'content-type': 'application/json' });
