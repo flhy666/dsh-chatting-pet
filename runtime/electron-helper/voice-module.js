@@ -38,6 +38,7 @@ const DEFAULT_CONFIG = {
   fullControl: false,
   plannerModel: '',
   controlChatter: true,
+  controlChatterChance: 0.3,
   plannerUrl: 'http://127.0.0.1:11434',
   idleVoice: true,
   triggerKey: 'c',
@@ -1400,7 +1401,11 @@ module.exports = function attachVoice(deps) {
 
   function controlChatter(line) {
     try {
-      if (readConfig().controlChatter === false) return;
+      const cfg = readConfig();
+      if (cfg.controlChatter === false) return;
+      const chance = Number(cfg.controlChatterChance);
+      const p = Number.isFinite(chance) ? Math.max(0, Math.min(1, chance)) : 0.3;
+      if (Math.random() > p) return;
       const text = String(line || '').trim();
       if (!text) return;
       Promise.resolve(speakNow({ text: '（小声）' + text, petId: 'main' })).catch(() => {});
