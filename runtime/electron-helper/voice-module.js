@@ -1632,6 +1632,20 @@ module.exports = function attachVoice(deps) {
         return { ok: false, error: e && e.message ? e.message : String(e) };
       }
     }
+    if (type === 'fun') {
+      try {
+        const picks = await biliRefresh(5);
+        const pick = picks.length ? picks[Math.floor(Math.random() * picks.length)] : null;
+        if (!pick) return { ok: false, error: '没找到好玩的' };
+        await launchTarget('https://www.bilibili.com/video/' + pick.bvid);
+        await new Promise((r) => setTimeout(r, 3000));
+        await wcuAction('scroll', { x: 1280, y: 700, deltaY: 300 });
+        announceTask('fun', '《' + pick.title + '》');
+        return { ok: true, title: pick.title, bvid: pick.bvid };
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : String(e) };
+      }
+    }
     if (type === 'qq') {
       const cfg = readConfig();
       if (!cfg.qqUid) return { ok: false, error: '还没填 QQ 群号/私聊号' };
