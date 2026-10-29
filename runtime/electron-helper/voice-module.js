@@ -412,7 +412,14 @@ module.exports = function attachVoice(deps) {
           ? 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer'
           : 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'),
     );
-    const voice = String(cfg.aliyunVoice || a.voice || (expressive ? 'longanhuan_v3.1' : 'Cherry'));
+    let voice = String(cfg.aliyunVoice || a.voice || (expressive ? 'longanhuan_v3.1' : 'Cherry'));
+    // 防呆：把 qwen3 的音色（Cherry/Serena…）用在 qwen-audio/cosyvoice 模型上会 411，
+    // 这时以 cloud.json 里的 voice 为准，避免一句都发不出去。
+    const QWEN3_VOICES = ['Cherry', 'Serena', 'Ethan', 'Chelsie', 'Momo', 'Vivian', 'Moon', 'Maia', 'Kai', 'Nofish', 'Bella', 'Jennifer'];
+    if (expressive && QWEN3_VOICES.includes(voice) && a.voice) {
+      voice = String(a.voice);
+      log('aliyun voice mismatch: use cloud voice ' + voice);
+    }
     return { a, model, expressive, endpoint, voice };
   }
 
@@ -478,7 +485,7 @@ module.exports = function attachVoice(deps) {
   }
 
   /** SSE 流式合成：每来一块就回调（第一块自带 WAV 头，后续补 44 字节头） */
-  async function streamAliyunChunks(text, cfg, onChunk) {
+  async function streamAliyunChunks(text, cfg, onChunk, firstChunkTimeoutMs) {
     const cloud = readCloudConfig();
     const aliyun = (cloud && cloud.aliyun) || {};
     const apiKey = aliyunApiKey();
@@ -490,6 +497,12 @@ module.exports = function attachVoice(deps) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
     let sentChunks = 0;
+    let firstTimer = null;
+    if (firstChunkTimeoutMs > 0) {
+      firstTimer = setTimeout(() => {
+        if (sentChunks === 0) controller.abort();
+      }, firstChunkTimeoutMs);
+    }
     let sawHeader = false;
     try {
       const resp = await fetch(endpoint, {
@@ -533,6 +546,7 @@ module.exports = function attachVoice(deps) {
           const raw = isRiff ? pcm.slice(44) : pcm;
           if (!raw.length) continue;
           sentChunks += 1;
+          if (firstTimer) { clearTimeout(firstTimer); firstTimer = null; }
           onChunk(raw, sentChunks);
         }
       }
@@ -542,6 +556,7 @@ module.exports = function attachVoice(deps) {
       return sentChunks > 0;
     } finally {
       clearTimeout(timer);
+      if (firstTimer) clearTimeout(firstTimer);
     }
   }
 
@@ -562,6 +577,7 @@ module.exports = function attachVoice(deps) {
     for (let i = 0; i < segments.length; i += 1) {
       const segmentText = segments[i];
       const ok = await streamAliyunChunks(segmentText, cfg, (wav) => {
+        // 首段 8 秒还没出声才放弃兜底；正常不切，保住音色
         if (!firstLogged) {
           firstLogged = true;
           log('say(aliyun): ' + text + ' [stream, segments ' + segments.length + ', first audio ' + (Date.now() - t0) + 'ms]');
@@ -578,7 +594,7 @@ module.exports = function attachVoice(deps) {
           streaming: true,
           rate: (function () { const r = Number(cfg.speedup); return Number.isFinite(r) ? Math.max(0.8, Math.min(1.5, r)) : 1; })(),
         });
-      });
+      }, i === 0 ? 8000 : 0);
       if (!ok) {
         if (seq === 0) {
           sendToWindow(win, { phase: 'end', id, ok: false });
@@ -2066,6 +2082,15 @@ module.exports = function attachVoice(deps) {
       }
     } catch (_) { /* ignore */ }
   }, 1500).unref?.();
+  // 每 60 秒捂一下阿里云连接，避免闲置后首块偶发卡到十秒
+  setInterval(() => {
+    try {
+      const cfg = readConfig();
+      if (cfg.engine === 'aliyun' && aliyunApiKey()) {
+        synthSegmentAliyun('嗯。', cfg).catch(() => {});
+      }
+    } catch (_) { /* ignore */ }
+  }, 60000).unref?.();
   log('voice module attached (engine=' + readConfig().engine + ')');
   return { trayItems, speakNow, readConfig };
 };
