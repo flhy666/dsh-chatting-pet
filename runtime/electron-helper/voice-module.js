@@ -1494,8 +1494,11 @@ module.exports = function attachVoice(deps) {
         await launchTarget('https://www.bilibili.com');
         steps.push('打开B站');
         await new Promise((r) => setTimeout(r, 2500));
-        await wcuAction('scroll', { x: 1280, y: 700, deltaY: 800 });
-        steps.push('刷了刷首页');
+        await wcuAction('click', { x: 640, y: 520 });
+        steps.push('点开一个视频');
+        await new Promise((r) => setTimeout(r, 2500));
+        await wcuAction('scroll', { x: 1280, y: 700, deltaY: 600 });
+        steps.push('刷了刷');
         const pet0 = await pickPetForIdle();
         if (pet0 && readConfig().taskFeedback !== false) {
           await hostRequest('POST', PET_ROUTE + '/chat?pet=' + encodeURIComponent(pet0.id) + '&surface=' + pet0.surface, JSON.stringify({
@@ -1534,6 +1537,9 @@ module.exports = function attachVoice(deps) {
           if (item && item.elementId) {
             await wcuAction('click', { elementId: item.elementId });
             steps.push('点击「' + q + '」');
+          } else if (/视频|第一个|封面/.test(q)) {
+            await wcuAction('click', { x: 640, y: 520 });
+            steps.push('点了第一个视频');
           } else {
             steps.push('没找到「' + q + '」');
           }
