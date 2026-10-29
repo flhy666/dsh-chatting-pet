@@ -37,6 +37,7 @@ const DEFAULT_CONFIG = {
   selfPlayIntervalSec: 180,
   fullControl: false,
   plannerModel: '',
+  controlChatter: true,
   plannerUrl: 'http://127.0.0.1:11434',
   idleVoice: true,
   triggerKey: 'c',
@@ -983,6 +984,7 @@ module.exports = function attachVoice(deps) {
       selfPlay: cfg.selfPlay === true,
       fullControl: cfg.fullControl === true,
       plannerModel: cfg.plannerModel || '',
+      controlChatter: cfg.controlChatter !== false,
       qqReady: !!(cfg.qqUid && (qqCharacter() || qqMemoryText(cfg.qqUid))),
       qqCharacter: (qqCharacter() && qqCharacter().name) || '',
       triggerKeys: TRIGGER_KEYS,
@@ -1023,6 +1025,9 @@ module.exports = function attachVoice(deps) {
     }
     if (typeof patch.plannerModel === 'string') {
       writeConfig({ plannerModel: patch.plannerModel.trim() });
+    }
+    if (patch && typeof patch.controlChatter === 'boolean') {
+      writeConfig({ controlChatter: patch.controlChatter });
     }
     if (patch && typeof patch.triggerKey === 'string' && TRIGGER_KEYS.some((k) => k.id === patch.triggerKey)) {
       writeConfig({ triggerKey: patch.triggerKey });
@@ -1393,6 +1398,14 @@ module.exports = function attachVoice(deps) {
     });
   }
 
+  function controlChatter(line) {
+    try {
+      if (readConfig().controlChatter === false) return;
+      const text = String(line || '').trim();
+      if (!text) return;
+      Promise.resolve(speakNow({ text: '（小声）' + text, petId: 'main' })).catch(() => {});
+    } catch (_) { /* ignore */ }
+  }
   async function planWithOllama(text) {
     const cfg = readConfig();
     const model = String(cfg.plannerModel || '').trim();
@@ -1555,6 +1568,7 @@ module.exports = function attachVoice(deps) {
         } else {
           steps.push('不会：' + part);
         }
+        if (steps.length) controlChatter('本鱼' + steps[steps.length - 1]);
       }
       const summary = steps.join('；') || '什么都没做';
       const pet = await pickPetForIdle();
