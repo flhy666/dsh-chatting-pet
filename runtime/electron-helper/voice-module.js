@@ -1354,6 +1354,53 @@ module.exports = function attachVoice(deps) {
     }
   }
 
+  let hudWin = null;
+  function hudShow() {
+    try {
+      if (hudWin && !hudWin.isDestroyed()) return;
+      const { BrowserWindow, screen } = require('electron');
+      const area = screen.getPrimaryDisplay().workAreaSize;
+      hudWin = new BrowserWindow({
+        width: 380,
+        height: 240,
+        x: area.width - 400,
+        y: area.height - 300,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        focusable: false,
+        skipTaskbar: true,
+        resizable: false,
+        webPreferences: { contextIsolation: true },
+      });
+      hudWin.setIgnoreMouseEvents(true);
+      const html = [
+        '<!doctype html><meta charset="utf-8">',
+        '<style>body{margin:0;font:13px "Microsoft YaHei",system-ui;color:#eaf2ff}',
+        '.box{background:rgba(20,24,34,.82);border:1px solid rgba(120,170,255,.35);border-radius:12px;padding:12px 14px;backdrop-filter:blur(6px)}',
+        '.t{font-weight:600;margin-bottom:8px;color:#9ec5ff}',
+        '.l{display:flex;gap:6px;margin:3px 0;opacity:.92}.d{color:#6ee7b7}</style>',
+        '<div class="box"><div class="t" id="t">本鱼在操作…</div><div id="l"></div></div>',
+        '<script>function add(x){var d=document.createElement("div");d.className="l";d.innerHTML="<span class=\\"d\\">›</span><span></span>";d.lastChild.textContent=x;document.getElementById("l").appendChild(d);}</script>',
+      ].join('');
+      hudWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    } catch (_) { hudWin = null; }
+  }
+  function hudStep(line) {
+    try {
+      hudShow();
+      if (!hudWin) return;
+      const js = 'add(' + JSON.stringify(String(line || '')) + ')';
+      if (hudWin.webContents.isLoading()) hudWin.webContents.once('did-finish-load', () => hudWin.webContents.executeJavaScript(js).catch(() => {}));
+      else hudWin.webContents.executeJavaScript(js).catch(() => {});
+    } catch (_) { /* ignore */ }
+  }
+  function hudHide(delay) {
+    setTimeout(() => {
+      try { if (hudWin && !hudWin.isDestroyed()) hudWin.close(); } catch (_) { /* ignore */ }
+      hudWin = null;
+    }, delay || 2500).unref?.();
+  }
   function wcuAction(action, input) {
     return new Promise((resolve) => {
       try {
@@ -1478,10 +1525,23 @@ module.exports = function attachVoice(deps) {
       .slice(-(limit || 12));
   }
 
+  async function isRunning(key) {
+    try {
+      const exe = { qq: 'QQ.exe', wechat: 'WeChat.exe', quark: 'Quark.exe', edge: 'msedge.exe', chrome: 'chrome.exe', firefox: 'firefox.exe' }[key];
+      if (!exe) return false;
+      const out = require('node:child_process').execFileSync('tasklist', ['/FI', 'IMAGENAME eq ' + exe], { encoding: 'utf8', windowsHide: true });
+      return out.toLowerCase().includes(exe.toLowerCase());
+    } catch (_) { return false; }
+  }
+
   async function openAppByName(name, url) {
     const key = appKey(name);
     if (!key) return { ok: false, error: '不认识这个软件：' + name };
     const target = APP_PATHS[key] || name;
+    if (!url && await isRunning(key)) {
+      const w = await focusAppWindow(key);
+      if (w) return { ok: true, key, reused: true };
+    }
     await launchApp(target, url ? [url] : []);
     await new Promise((r) => setTimeout(r, key === 'quark' ? 4500 : 3000));
     await focusAppWindow(key);
@@ -1501,12 +1561,16 @@ module.exports = function attachVoice(deps) {
       return { ok: true, steps: ['打开QQ'], summary: 'QQ 打开了，窗口还没出来' };
     }
     // 点左侧群列表中部，再滚一滚
+    hudStep('打开 QQ');
     await wcuAction('click', { x: 150, y: 380 });
+    hudStep('点群列表');
     await new Promise((r) => setTimeout(r, 800));
     await wcuAction('scroll', { x: 220, y: 520, deltaY: 240 });
     await new Promise((r) => setTimeout(r, 800));
+    hudStep('读屏幕');
     const lines = await readScreenLines(10);
     const summary = lines.length ? lines.join('；') : 'QQ 打开了，没读到字';
+    hudHide(3000);
     announceTask('qq', summary);
     return { ok: true, steps: ['打开QQ', '点开群列表', '翻了翻'], summary };
   }
@@ -1741,9 +1805,10 @@ module.exports = function attachVoice(deps) {
         } else {
           steps.push('不会：' + part);
         }
-        if (steps.length) controlChatter('本鱼' + steps[steps.length - 1]);
+        if (steps.length) { controlChatter('本鱼' + steps[steps.length - 1]); hudStep(steps[steps.length - 1]); }
       }
       const summary = steps.join('；') || '什么都没做';
+      hudStep('完成：' + summary.slice(0, 60)); hudHide(2600);
       const pet = await pickPetForIdle();
       if (pet && readConfig().taskFeedback !== false) {
         await hostRequest('POST', PET_ROUTE + '/chat?pet=' + encodeURIComponent(pet.id) + '&surface=' + pet.surface, JSON.stringify({
