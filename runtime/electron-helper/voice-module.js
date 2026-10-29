@@ -2237,17 +2237,13 @@ module.exports = function attachVoice(deps) {
                 ' text=' + String(snapshot.text || '').slice(0, 80),
             );
             // 不盯着 DSH / 终端 / 编辑器看，免得学一嘴技术词
-    if (/桌宠（桌面模式）/.test(String(snapshot.title || ''))) {
-      return { ok: false, error: 'self-window' };
-    }
-    if (/DeepSeek Harness|Windows PowerShell|PowerShell|命令提示符|Command Prompt|Windows Terminal|Visual Studio Code|Cursor/i.test(String(snapshot.title || ''))) {
-      return { ok: false, error: 'tech-window' };
-    }
-    if (/DeepSeek Harness\.exe|WindowsTerminal\.exe|powershell\.exe|Code\.exe|Cursor\.exe/i.test(String(snapshot.processName || ''))) {
-      return { ok: false, error: 'tech-process' };
-    }
-    if (false) {
-              log('idle chat skip observation: own window');
+            const obsTitle = String(snapshot.title || '');
+            const obsProc = String(snapshot.processName || '');
+            const selfWin = /桌宠（桌面模式）/.test(obsTitle);
+            const techWin = /DeepSeek Harness|Windows PowerShell|PowerShell|命令提示符|Command Prompt|Windows Terminal|Visual Studio Code|Cursor/i.test(obsTitle)
+              || /DeepSeek Harness\.exe|WindowsTerminal\.exe|powershell\.exe|Code\.exe|Cursor\.exe/i.test(obsProc);
+            if (selfWin || techWin) {
+              log('idle chat skip observation: ' + (selfWin ? 'own' : 'tech'));
               snapshot = { title: '', processName: '', text: '' };
             } else {
               appendObservation(snapshot);
