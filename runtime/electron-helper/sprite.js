@@ -1660,7 +1660,6 @@ class PetSprite {
       { label: '看群', action: 'task-qq' },
       { label: '自己玩电脑', action: 'self-play' },
       { label: '上网找乐子', action: 'task-fun' },
-      { label: '打字下指令', action: 'command-input' },
       { label: '语音音色', children: voicePresetMenu() },
       { label: '回到初始位置', action: 'home' },
       // 显示位置（仅网页/仅桌面/两者/都不）：改这只宠物的 display 配置 + 宿主重载生效。
@@ -1749,12 +1748,6 @@ class PetSprite {
       return;
     }
 
-    if (leaf.action === 'command-input') {
-      if (window.petBridge && typeof window.petBridge.openCommandWindow === 'function') {
-        window.petBridge.openCommandWindow();
-      }
-      return;
-    }
 
     if (leaf.action === 'self-play') {
       if (window.petBridge && typeof window.petBridge.runSelfPlay === 'function') {
