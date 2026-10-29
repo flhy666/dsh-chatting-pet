@@ -1394,6 +1394,22 @@ module.exports = function attachVoice(deps) {
     if (!text) return { ok: false, error: '没有指令' };
     const steps = [];
     try {
+      // 常见自然说法：直接开 B站 / 浏览器
+      if (/b站|哔哩|bilibili/i.test(text)) {
+        await launchTarget('https://www.bilibili.com');
+        steps.push('打开B站');
+        await new Promise((r) => setTimeout(r, 2500));
+        await wcuAction('scroll', { x: 1280, y: 700, deltaY: 800 });
+        steps.push('刷了刷首页');
+        const pet0 = await pickPetForIdle();
+        if (pet0 && readConfig().taskFeedback !== false) {
+          await hostRequest('POST', PET_ROUTE + '/chat?pet=' + encodeURIComponent(pet0.id) + '&surface=' + pet0.surface, JSON.stringify({
+            text: '【执行结果】已经在浏览器里打开B站并刷了刷首页。用一句话告诉主人（20 字内，口语）。',
+          }));
+        }
+        return { ok: true, steps };
+      }
+
       const parts = text.split(/然后|接着|再|并且|并/).map((s) => s.trim()).filter(Boolean);
       for (const part of parts) {
         let m;
@@ -1404,6 +1420,11 @@ module.exports = function attachVoice(deps) {
           await launchTarget(target);
           steps.push('打开' + name);
           await new Promise((r) => setTimeout(r, name === '浏览器' || /^https?:/.test(target) ? 1500 : 700));
+        } else if ((m = part.match(/^去\s*(.+)$/))) {
+          const name = m[1].trim().replace(/^(浏览器|电脑|桌面)/, '');
+          await launchTarget(name || 'msedge');
+          steps.push('打开' + (name || '浏览器'));
+          await new Promise((r) => setTimeout(r, 1200));
         } else if ((m = part.match(/^(?:输入|打字|填写)\s*(.+)$/))) {
           await wcuAction('type_text', { text: m[1].trim(), focusMode: 'preserve' });
           steps.push('输入文字');
