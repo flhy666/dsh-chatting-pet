@@ -89,6 +89,9 @@ contextBridge.exposeInMainWorld('petBridge', {
   runTask(kind) {
     ipcRenderer.send('pet:task', kind);
   },
+  runSelfPlay() {
+    ipcRenderer.send('pet:selfplay');
+  },
   getVoicePresets() {
     try {
       return ipcRenderer.sendSync('pet:voice-presets');

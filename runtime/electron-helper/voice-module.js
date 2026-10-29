@@ -1447,9 +1447,9 @@ module.exports = function attachVoice(deps) {
     }
   }
   let selfPlayBusy = false;
-  async function runSelfPlay() {
+  async function runSelfPlay(force) {
     const cfg = readConfig();
-    if (cfg.selfPlay !== true || selfPlayBusy) return { ok: false, error: 'off' };
+    if ((cfg.selfPlay !== true && !force) || selfPlayBusy) return { ok: false, error: 'off' };
     if (idleState.listening || idleState.speaking) return { ok: false, error: 'busy' };
     selfPlayBusy = true;
     try {
@@ -1977,6 +1977,10 @@ module.exports = function attachVoice(deps) {
 
   ipcMain.on('pet:voice-preset', (_event, id) => {
     if (typeof id === 'string') applyPreset(id);
+  });
+
+  ipcMain.on('pet:selfplay', () => {
+    runSelfPlay(true).then((res) => log('selfplay -> ' + JSON.stringify(res))).catch(() => {});
   });
 
   ipcMain.on('pet:task', (_event, kind) => {
