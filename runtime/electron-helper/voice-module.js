@@ -1388,6 +1388,20 @@ module.exports = function attachVoice(deps) {
     });
   }
 
+  function launchApp(target, args) {
+    return new Promise((resolve) => {
+      try {
+        const fsmod = require('node:fs');
+        if (fsmod.existsSync(target)) {
+          const child = require('node:child_process').spawn(target, args || [], { detached: true, windowsHide: true });
+          child.unref?.();
+          resolve(true);
+          return;
+        }
+      } catch (_) { /* fall through */ }
+      launchTarget(target).then(resolve);
+    });
+  }
   function launchTarget(target) {
     return new Promise((resolve) => {
       try {
@@ -1410,6 +1424,109 @@ module.exports = function attachVoice(deps) {
       if (!text) return;
       Promise.resolve(speakNow({ text: '（小声）' + text, petId: 'main' })).catch(() => {});
     } catch (_) { /* ignore */ }
+  }
+  const APP_PATHS = {
+    qq: 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe',
+    wechat: 'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe',
+    weixin: 'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe',
+    quark: path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Quark', 'Quark.exe'),
+    edge: 'msedge',
+    chrome: 'chrome',
+    firefox: 'firefox',
+    notepad: 'notepad.exe',
+    calc: 'calc.exe',
+  };
+
+  function appKey(name) {
+    const s = String(name || '').toLowerCase();
+    if (/qq/.test(s)) return 'qq';
+    if (/微信|wechat|weixin/.test(s)) return 'wechat';
+    if (/夸克|quark/.test(s)) return 'quark';
+    if (/edge/.test(s)) return 'edge';
+    if (/chrome|谷歌/.test(s)) return 'chrome';
+    if (/firefox|火狐/.test(s)) return 'firefox';
+    return '';
+  }
+
+  async function focusAppWindow(key) {
+    const listed = await wcuAction('list_windows', {});
+    const wins = (listed && listed.windows ? listed.windows : []).filter((w) => {
+      const name = String(w.name || '');
+      const box = w.boundingBox || {};
+      if ((box.width || 0) < 300) return false;
+      if (key === 'qq') return /QQ/i.test(name);
+      if (key === 'wechat') return /微信|WeChat|Weixin/i.test(name);
+      if (key === 'quark') return /夸克|Quark/i.test(name);
+      if (key === 'edge') return /Edge/i.test(name);
+      if (key === 'chrome') return /Chrome/i.test(name);
+      return false;
+    });
+    const win = wins[0];
+    if (win) {
+      await wcuAction('activate_window', { windowTitle: win.name });
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return win || null;
+  }
+
+  async function readScreenLines(limit) {
+    const seen = await wcuAction('ocr', { query: '' });
+    return (seen && (seen.lines || []))
+      .map((l) => String(l.text || (l.words || []).map((w) => w.text).join('') || '').trim())
+      .map((s) => s.replace(/(?<=[\\u4e00-\\u9fa5])\\s+(?=[\\u4e00-\\u9fa5])/g, '').replace(/\\s{2,}/g, ' ').trim())
+      .filter((s) => s.length > 1)
+      .slice(-(limit || 12));
+  }
+
+  async function openAppByName(name, url) {
+    const key = appKey(name);
+    if (!key) return { ok: false, error: '不认识这个软件：' + name };
+    const target = APP_PATHS[key] || name;
+    await launchApp(target, url ? [url] : []);
+    await new Promise((r) => setTimeout(r, key === 'quark' ? 4500 : 3000));
+    await focusAppWindow(key);
+    return { ok: true, key };
+  }
+
+  async function browseQqGroups() {
+    const opened = await openAppByName('qq');
+    if (!opened.ok) return opened;
+    await focusAppWindow('qq');
+    // 点左侧群列表中部，再滚一滚
+    await wcuAction('click', { x: 150, y: 380 });
+    await new Promise((r) => setTimeout(r, 800));
+    await wcuAction('scroll', { x: 220, y: 520, deltaY: 240 });
+    await new Promise((r) => setTimeout(r, 800));
+    const lines = await readScreenLines(10);
+    const summary = lines.length ? lines.join('；') : 'QQ 打开了，没读到字';
+    announceTask('qq', summary);
+    return { ok: true, steps: ['打开QQ', '点开群列表', '翻了翻'], summary };
+  }
+
+  async function askApp(question, appName) {
+    const key = appKey(appName);
+    if (!key) return { ok: false, error: '不认识这个软件' };
+    let url = '';
+    if (/搜|查/.test(question)) {
+      const q = question.replace(/^.*?(搜|查)\s*/, '');
+      url = key === 'quark'
+        ? 'https://quark.sm.cn/s?q=' + encodeURIComponent(q)
+        : 'https://www.bing.com/search?q=' + encodeURIComponent(q);
+    } else {
+      const q = question.replace(/^.*?(问|说)\s*/, '');
+      if (key === 'quark') url = 'https://ai.quark.cn/';
+      else url = 'https://www.bing.com/search?q=' + encodeURIComponent(q);
+    }
+    const opened = await openAppByName(appName, url);
+    if (!opened.ok) return opened;
+    if (!url.includes('q=')) {
+      await wcuAction('type_text', { text: question.replace(/^.*?(问|说)\s*/, ''), focusMode: 'preserve' });
+      await wcuAction('keypress', { keys: ['enter'] });
+    }
+    await new Promise((r) => setTimeout(r, 3500));
+    const lines = await readScreenLines(8);
+    announceTask('ask', lines.join('；') || '打开了，还没看到回答');
+    return { ok: true, steps: ['打开' + appName, '提问'], summary: lines.join('；') };
   }
   async function openQqAndBrowse() {
     const exe = 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe';
@@ -1530,9 +1647,24 @@ module.exports = function attachVoice(deps) {
         return { ok: true, steps: done, planner: 'ollama' };
       }
 
-      // 想翻 QQ：真的打开 QQ 窗口，读屏幕上的聊天
+      // QQ：打开并点群列表
       if (/qq/i.test(text)) {
-        return await openQqAndBrowse();
+        return await browseQqGroups();
+      }
+      // 微信：打开并读当前聊天
+      if (/微信|wechat|weixin/i.test(text)) {
+        const opened = await openAppByName('微信');
+        if (!opened.ok) return opened;
+        const lines = await readScreenLines(10);
+        announceTask('wechat', lines.join('；') || '微信打开了，没读到字');
+        return { ok: true, steps: ['打开微信', '看聊天'], summary: lines.join('；') };
+      }
+      // 夸克 / 浏览器：打开并问它/搜一下
+      if (/夸克|quark/i.test(text) && /问|搜|查|看看/i.test(text)) {
+        return await askApp(text, 'quark');
+      }
+      if (/浏览器|edge|chrome|谷歌/i.test(text) && /问|搜|查/i.test(text)) {
+        return await askApp(text, /chrome|谷歌/i.test(text) ? 'chrome' : 'edge');
       }
 
       // 常见自然说法：直接开 B站 / 浏览器
